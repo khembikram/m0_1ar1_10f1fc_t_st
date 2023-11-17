@@ -1,0 +1,97 @@
+precision highp float;
+
+using namespace std;
+
+#import <utils>
+
+const vec3 WORLD_UP = vec3(0.0, 1.0, 0.0);
+const float DEG_TO_RAD = 0.0174533;
+const float HORIZONTAL_ANGLE_LIMIT = 25.0 * DEG_TO_RAD;
+const vec4 FILL_COLOR = vec4(0.0, 0.0, 0.0, 0.001);
+const float EPSILON = 0.001;
+
+mat4 transpose(mat4 m) {
+  mat4 result;
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      result[i][j] = m[j][i];
+    }
+  }
+  return result;
+}
+
+vec4 getWorldPosition() {
+  return getModelMatrix() * vec4(getVertexPosition().xyz, 1.0);
+}
+
+vec4 getWorldNormal() {
+  return transpose(getInverseModelMatrix()) * vec4(getVertexNormal().xyz, 1.0);
+}
+
+vec4 getClipPosition() {
+  vec4 clipPosition = getModelViewProjectionMatrix()
+    * vec4(fragment(getVertexPosition()).xyz, 1.0);
+  clipPosition.xyz /= clipPosition.w;
+  return clipPosition;
+}
+
+float checkUVSquare(vec2 st, float size, float feather) {
+  float halfSizeComplement = (1.0 - size) * 0.5;
+  vec2 lowerCornerValue = smoothstep(
+    vec2(halfSizeComplement - feather),
+    vec2(halfSizeComplement + feather),
+    st
+  );
+  float result = lowerCornerValue.x * lowerCornerValue.y;
+  vec2 upperCornerValue = smoothstep(
+    vec2(halfSizeComplement - feather),
+    vec2(halfSizeComplement + feather),
+    1.0 - st
+  );
+  result *= upperCornerValue.x * upperCornerValue.y;
+  return result;
+}
+
+vec2 getNormalSpaceUV(vec3 worldPos, vec3 normal) {
+  vec3 p = worldPos.xyz;
+  vec3 pointOnPlane = p - (dot(normal, p) * normal);
+  vec3 side = normalize(cross(WORLD_UP, normal));
+  vec3 up = normalize(cross(normal, side));
+  float x = dot(pointOnPlane, side);
+  float y = dot(pointOnPlane, up);
+  return vec2(x, y);
+}
+
+// @param[default=#FFFFFF77] GridColor 
+// @param[default=#FFFFFFFF] CrossColor 
+// @param[default=10.0, min=0.0, max=20.0] TilePerUnit 
+// @param[default=0.05, min=0.0, max=1.0] GridWidth
+// @param[default=0.2, min=0.0, max=1.0] CrossSize 
+// @param[default=0.1, min=0.0, max=0.3] Feather 
+void main(
+  vec4 GridColor, vec4 CrossColor, 
+  float TilePerUnit, float GridWidth, float CrossSize, float Feather,
+  out vec4 Color
+){
+  vec2 TexCoords = getVertexTexCoord();
+  vec4 worldPos = getWorldPosition(); 
+  vec3 normal = normalize(getWorldNormal().xyz);
+  vec2 uv;
+  if (abs(dot(normal, WORLD_UP)) > cos(HORIZONTAL_ANGLE_LIMIT)) { 
+    uv = worldPos.xz;
+  } else { 
+    uv = getNormalSpaceUV(worldPos.xyz, normal);
+  }
+  uv *= fragment(TilePerUnit);
+  vec2 tiledUV = fract(uv);
+
+  vec4 clipPos = getClipPosition();
+  float filterWidth = max(EPSILON, TilePerUnit * fwidth(clipPos.w));
+
+  float gridMask = checkUVSquare(tiledUV, 1.0 - GridWidth, filterWidth);
+  float crossMask = checkUVSquare(fract(tiledUV + vec2(0.5)), CrossSize, filterWidth);
+
+  vec4 baseColor = mix(mix(GridColor, CrossColor, crossMask), FILL_COLOR, gridMask);
+  float featherAlpha = checkUVSquare(TexCoords, fragment((1.0-Feather)), Feather);
+  Color = baseColor * featherAlpha;
+}
